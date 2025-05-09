@@ -85,15 +85,18 @@ class Lib
 
     public function calculateNow($latitude = '35.708309', $longitude = '51.380730')
     {
-        $tz = $this->getNearestTimezone($latitude, $longitude);
-        $now = new DateTime('now', new DateTimeZone($tz[0]));
+        $now = new DateTime('now');
+        $tz = $this->getNearestTimezone($latitude, $longitude, null, $now);
+        
+        $now->setTimezone(new DateTimeZone($tz[0]));
+        
         $year = $now->format('Y');
         $month = $now->format('m');
         $day = $now->format('d');
         $hour = $now->format('H');
         $min = $now->format('i');
         $sec = $now->format('s');
-        $time_zone = $tz[1];
+        $time_zone = $tz[0];
         $dst_hour = 0;
         $dst_min = 0;
         $nesting = 2;
@@ -118,24 +121,38 @@ class Lib
         );
     }
 
-    public function getNearestTimezone($cur_lat, $cur_long, $country_code = null)
+    /**
+     * Get the nearest timezone and its offset for a given location and date
+     * 
+     * @param float $cur_lat Current latitude
+     * @param float $cur_long Current longitude
+     * @param string|null $country_code Optional country code (ISO 3166-1 alpha-2)
+     * @param DateTime|null $targetDate The date for which to calculate the timezone offset (defaults to now)
+     * @return array|null Returns [timezone_id, formatted_offset] or null if no match found
+     */
+    public function getNearestTimezone($cur_lat, $cur_long, $country_code = null, DateTime $targetDate = null)
     {
         static $locationCache = [];
-    
+
+        // Use current date if no target date is provided
+        if ($targetDate === null) {
+            $targetDate = new DateTime('now');
+        }
+
         // Handle specific case for Iran
         if (strtolower($country_code) === 'ir') {
             return ['Asia/Tehran', '+03:30'];
         }
-    
+
         // Fetch timezone identifiers based on country code
         $timezone_ids = $country_code
             ? DateTimeZone::listIdentifiers(DateTimeZone::PER_COUNTRY, strtoupper($country_code))
             : DateTimeZone::listIdentifiers();
-    
+
         if (empty($timezone_ids)) {
             return null;
         }
-    
+
         // Single timezone case
         if (count($timezone_ids) === 1) {
             $time_zone = $timezone_ids[0];
@@ -145,10 +162,10 @@ class Lib
             $rad_cur_long = deg2rad($cur_long);
             $sin_cur_lat = sin($rad_cur_lat);
             $cos_cur_lat = cos($rad_cur_lat);
-    
+
             $max_distance = -INF;
             $time_zone = null;
-    
+
             foreach ($timezone_ids as $timezone_id) {
                 // Cache timezone locations to avoid repeated lookups
                 if (!isset($locationCache[$timezone_id])) {
@@ -162,24 +179,24 @@ class Lib
                         'long' => $location['longitude'],
                     ];
                 }
-    
+
                 $tz_lat = $locationCache[$timezone_id]['lat'];
                 $tz_long = $locationCache[$timezone_id]['long'];
-    
+
                 // Convert timezone coordinates to radians
                 $tz_lat_rad = deg2rad($tz_lat);
                 $tz_long_rad = deg2rad($tz_long);
-    
+
                 // Calculate angle components
                 $theta = $rad_cur_long - $tz_long_rad;
                 $sin_tz_lat = sin($tz_lat_rad);
                 $cos_tz_lat = cos($tz_lat_rad);
                 $cos_theta = cos($theta);
-    
+
                 // Compute dot product (cosine of the angle)
                 $distance = $sin_cur_lat * $sin_tz_lat + $cos_cur_lat * $cos_tz_lat * $cos_theta;
                 $distance = max(-1, min(1, $distance)); // Clamp to avoid NaN
-    
+
                 // Track maximum dot product (closest distance)
                 if ($distance > $max_distance) {
                     $max_distance = $distance;
@@ -187,22 +204,23 @@ class Lib
                 }
             }
         }
-    
+
         if (!$time_zone) {
             return null;
         }
-    
-        // Calculate formatted offset
+
+        // Calculate formatted offset for the specific target date
         $tz = new DateTimeZone($time_zone);
-        $date = new DateTime('now', $tz);
-        $offset_seconds = $tz->getOffset($date);
-    
+        $offsetDate = clone $targetDate;
+        $offsetDate->setTimezone($tz);
+        $offset_seconds = $tz->getOffset($offsetDate);
+
         $sign = $offset_seconds >= 0 ? '+' : '-';
         $offset_seconds = abs($offset_seconds);
         $hours = (int) ($offset_seconds / 3600);
         $minutes = (int) (($offset_seconds % 3600) / 60);
         $formatted = sprintf('%s%02d:%02d', $sign, $hours, $minutes);
-    
+
         return [$time_zone, $formatted];
     }
 
@@ -243,23 +261,29 @@ class Lib
         $nesting = 4,
         array $infolevel = ["basic", "ashtakavarga", "grahabala", "rashibala", "yogas", "panchanga", "transit"]
     ) {
-
         $locality = new Locality([
             'longitude' => $longitude,
             'latitude' => $latitude,
             'altitude' => 0
         ]);
 
-        $tz = $this->getNearestTimezone($latitude, $longitude);
-        # format datetime for DateTime Object
+        // Create a target date object for the historical date
+        $targetDate = new DateTime(sprintf("%s-%s-%s %s:%s:%s", $year, $month, $day, $hour, $min, $sec));
+        
+        // Get timezone information for the specific historical date
+        $tz = $this->getNearestTimezone($latitude, $longitude, null, $targetDate);
+        
+        // Format datetime with the historically accurate timezone offset
         $datetime = sprintf("%s-%s-%s %s:%s:%s%s", $year, $month, $day, $hour, $min, $sec, $tz[1]);
         $date = new DateTime($datetime);
 
-        # perform DST offest
-        $date->modify(sprintf("-%s hours", $dst_hour));
-        $date->modify(sprintf("-%s minutes", $dst_min));
+        // Perform DST offset if manually specified (usually not needed with corrected timezone)
+        if ($dst_hour != 0 || $dst_min != 0) {
+            $date->modify(sprintf("-%s hours", $dst_hour));
+            $date->modify(sprintf("-%s minutes", $dst_min));
+        }
 
-        # setup ephemeris and calculations
+        // Setup ephemeris and calculations
         $ganita = new Swetest(["swetest" => SWETEST_PATH]);
         $data = new Data($date, $locality, $ganita);
         $data->calcVargaData($vargas);

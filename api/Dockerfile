@@ -29,6 +29,11 @@ RUN apt-get update -y && \
 # Add PHP repository
 RUN add-apt-repository ppa:ondrej/php -y
 
+#compile swiss ephemeris
+
+RUN cd swetest/src && make clean && make && chmod +x swetest
+
+
 # Update package list after adding new repository
 RUN apt-get update -y
 
